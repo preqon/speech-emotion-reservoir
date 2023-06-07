@@ -72,16 +72,22 @@ def mel_freq_spectral_coeffs(frames_array, frame_rate):
     1. Find short time fourier transform.
     2. Find power spectrogram.
     3. Map power spectrogram to the mel scale.
-    4. Take logarithm of mel-scale spectrogram.
-    5. Return log mel-scale spectrogram.
+    4. Return logarithm of mel-scale spectrogram.
     '''
     # references:
     # https://medium.com/@tanveer9812/mfccs-made-easy-7ef383006040
     # http://practicalcryptography.com/miscellaneous/machine-learning/guide-mel-frequency-cepstral-coefficients-mfccs/
 
+    # pad signal so varying n_frames can be chosen such that it is close to 
+    # 512 for average signal length and is divisible by 4.
+    remainder = len(frames_array) % 240
+    n_zeroes = 240 - remainder if remainder else 0
+    frames_array = np.pad(frames_array, (0, n_zeroes), 'constant')
+    
     #short time fourier transform
         #applies discrete fft in short overlapping windows.
-    n_fft = 512 #number of points in each fft i.e. length of each window.
+    n_fft = len(frames_array) // 60 #number of points in each fft i.e. length of each window.
+        #varying n_fft to lead to fixed input size
     stft = librosa.stft(
         y=frames_array,
         n_fft = n_fft, 
@@ -113,12 +119,11 @@ def mel_freq_spectral_coeffs(frames_array, frame_rate):
     mel_log_spectrogram = np.log10(mel_spectrogram)
     print(mel_log_spectrogram.shape)
 
-    #standardise final spec length?
-
 def main():
     paths = [
          "data/Crema/1001_DFA_ANG_XX.wav",
-         "data/Crema/1001_IEO_HAP_LO.wav"
+         "data/Crema/1001_IEO_HAP_LO.wav",
+         "data/Crema/1001_IEO_ANG_HI.wav"
     ]
     for path in paths:
         frames_array, frame_rate = read_wav(path)
