@@ -51,43 +51,48 @@
 # linear classifier on membrane potentials of pooling layer and corresponding labels
 #3. evaluate fixed network using test set with trained classifier
 
-import wave
 import numpy as np
 import sys
 import librosa
+from sklearn.preprocessing import normalize
 
-def read_wav(path):
+def read_wav(path: str):
     '''
-    Given path to a single channel wav file.
-    Return numpy array of frames and file's frame rate.
+    Given path to a single channel wav file,
+    return numpy array of frames and file's frame rate.
     '''
     # using librosa which does some type conversion of each frame from my wavs' 
     # int16 to float, don't think there should be any resulting issues.
     frames_array, frame_rate = librosa.load(path, sr=None)
     return (frames_array, frame_rate)
 
-def mel_freq_spectral_coeffs(frames_array, frame_rate):
+def mel_freq_spectral_coeffs(frames_array: np.ndarray, frame_rate: float):
     '''
     Equivalent to MFCC without the final discrete cosine transform.
     1. Find short time fourier transform.
     2. Find power spectrogram.
     3. Map power spectrogram to the mel scale.
     4. Return logarithm of mel-scale spectrogram.
+    5. Normalise coefficients between 0 and 1.
+    returns array size m x n, m time frames, n frequency bins
     '''
     # references:
     # https://medium.com/@tanveer9812/mfccs-made-easy-7ef383006040
     # http://practicalcryptography.com/miscellaneous/machine-learning/guide-mel-frequency-cepstral-coefficients-mfccs/
 
-    # pad signal so varying n_frames can be chosen such that it is close to 
-    # 512 for average signal length and is divisible by 4.
+    # tldr hacky but ensures mfsc has consistent shape across varying input
+    # signal length. might change so varying input length allowed:
+    # pad signal so varying n_fft can be chosen such that it is close to 
+    # 512 for the average signal length in dataset and is divisible by 4.
     remainder = len(frames_array) % 240
     n_zeroes = 240 - remainder if remainder else 0
     frames_array = np.pad(frames_array, (0, n_zeroes), 'constant')
     
     #short time fourier transform
         #applies discrete fft in short overlapping windows.
-    n_fft = len(frames_array) // 60 #number of points in each fft i.e. length of each window.
-        #varying n_fft to lead to fixed input size
+    n_fft = len(frames_array) // 60 #number of points in each fft i.e. length
+        #of each window.
+        #varying n_fft here leads to fixed mfsc shape
     stft = librosa.stft(
         y=frames_array,
         n_fft = n_fft, 
@@ -104,9 +109,7 @@ def mel_freq_spectral_coeffs(frames_array, frame_rate):
         pad_mode='constant' #y is padded on both ends with zeros if center=True
     )
 
-    #power spectrogram
     power_spectrogram = np.abs(stft)**2
-
     # map spectrogram to mel-scale (equal diffs in pitch sound equally distant)
         #create set of mel triangular filters
     mel_filter_bank = librosa.filters.mel(sr=frame_rate, n_fft=n_fft)
@@ -117,17 +120,57 @@ def mel_freq_spectral_coeffs(frames_array, frame_rate):
     # Compress large energies with log, such that loudness makes it harder to 
     # tell pitch apart.
     mel_log_spectrogram = np.log10(mel_spectrogram)
-    print(mel_log_spectrogram.shape)
+
+    # shift all negative values >= 0 and normalise between 0 and 1 
+    # across all coefficients.
+    original_shape = mel_log_spectrogram.shape
+    mel_log_spectrogram = mel_log_spectrogram.flatten()
+    mel_log_spectrogram = mel_log_spectrogram + np.abs(np.amin(
+        mel_log_spectrogram))
+    mel_log_spectrogram = mel_log_spectrogram / (
+        np.amax(mel_log_spectrogram)-np.amin(mel_log_spectrogram))
+    mel_log_spectrogram = np.reshape(mel_log_spectrogram, original_shape)
+    return mel_log_spectrogram 
+
+def input_layer(input_shape):
+    '''
+    Initialise input neurons.
+    single 2D matrix where dynamics of neuron (m,n) represents time frame m 
+    and frequency band n.
+    '''
+    in_layer = np.zeros(input_shape)
+    return in_layer
+
+def encode_mfsc_ttfs(in_layer,mfsc, time_steps, t):
+    '''
+    use time to first spike scheme to encode the mel-frequency spectral
+    coefficients.  
+    '''
+    time_to_first_spike = np.round(mfsc * time_steps)
+    in_layer = time_to_first_spike == t
+    return in_layer.astype(int)
+
 
 def main():
+    #initialise layers.
     paths = [
          "data/Crema/1001_DFA_ANG_XX.wav",
          "data/Crema/1001_IEO_HAP_LO.wav",
          "data/Crema/1001_IEO_ANG_HI.wav"
     ]
+    input_shape = (128,327)
+    in_layer = input_layer(input_shape)
+    time_steps = 50
+    
+    #train 
     for path in paths:
         frames_array, frame_rate = read_wav(path)
-        mel_freq_spectral_coeffs(frames_array, frame_rate)
+        mfsc = mel_freq_spectral_coeffs(frames_array, frame_rate)
+        for t in range(0,time_steps+1):
+            in_layer = encode_mfsc_ttfs(in_layer,mfsc,time_steps,t)
+            break
+        break
 
+    #readout
 if __name__ == "__main__":
     main()
