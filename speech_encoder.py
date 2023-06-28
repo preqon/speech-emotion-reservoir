@@ -1,15 +1,24 @@
 '''
 Encodes speech using spikes under a biologically plausible coding scheme.
-1. digital signal
-2. cochlear filter bank
-3. time domain convolution with input signal
-4. windowed energies
-5. latency coding to spikes
+---
+1. Obtain cochlear-like frequency filters reconstructed in the time domain.
+    - Constant Q filters -> real-valued impulse response (wavelets) 
+2. Perform time domain convolution of each wavelet with input signal to yield
+a signal decomposed into time-frequency domain.
+    - Notice by using wavelet transforms, we could generate a spike for each 
+    convolution in real time in a neuromorphic implementation.
+4. Window the decomposed signal and find logarithmic energies in each window. 
+5. Convert energies to spike times using latency code
+
+---
+reference: doi: 10.1109/IJCNN.2018.8489434
 '''
 
 import librosa
 import numpy as np
 import sys
+import glob
+import pickle
 
 def read_wav(path: str):
     '''
@@ -182,22 +191,33 @@ def spike_latency_coding(energies):
     return latencies
 
 def main():
-    path = "data/Crema/1001_DFA_ANG_XX.wav"
-
-    audio_signal, sampling_rate = read_wav(path)
-
+    log = open('logs/speech_encoder.log', 'w+')
+    sys.stdout = log
+    wav_paths = glob.glob('data/Crema/*.wav')
+    sampling_rate = 16000
     wavelets, wavelet_lengths = cochlear_wavelets(sampling_rate)
-
-    time_domain_convolution = cochlear_convolution(
-        audio_signal, 
-        wavelets,
-        wavelet_lengths) 
     
-    energies = windowed_energies(time_domain_convolution)
-    spike_trains = spike_latency_coding(energies)
+    for wav_path in wav_paths:
 
-    print("\nSpike times in first five windows:")
-    print(spike_trains[:,:5])
+        audio_signal, wav_sampling_rate = read_wav(wav_path)
+        assert sampling_rate == wav_sampling_rate, "mismatched sampling rate"
+
+        time_domain_convolution = cochlear_convolution(
+            audio_signal, 
+            wavelets,
+            wavelet_lengths) 
+    
+        energies = windowed_energies(time_domain_convolution)
+        spike_trains = spike_latency_coding(energies)
+
+        print("\nSpike times in first five windows:")
+        print(spike_trains[:,:5])
+
+        spikes_fname = wav_path.split('/')[-1].split('.wav')[0] + '_spks'
+        with open(f'preprocessed/crema_spikes/{spikes_fname}.pk', 'wb+') as f:
+            pickle.dump(spike_trains, f)
+    
+    log.close()
 
 if __name__ == '__main__':
     main()
