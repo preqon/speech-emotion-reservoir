@@ -123,36 +123,62 @@ def cochlear_convolution(signal, wavelets, wavelet_lengths):
 
 def windowed_energies(y):
     '''
-    Window the time domain convolution and find energies in each window.
+    Window each filtered signal and find energies in each window.
+    Can be thought of as downsampling. There is room for this since cochlear
+    filters' freq ranges are already limited compared to 16kHz sr.
     '''
-    window_len = 960 #60 possible spikes per second 
-    energies = np.zeros((20, y.shape[1]//2)) #stride length l/2
+    window_len = 512 
+    stride_len = window_len // 2
+    #With this stride, we downsample to 32 / window_len kHz
+    #window_len 512 comes out to 0.0625 kHz 
+    #Later, since one spike per window, encoding spike rate = 62.5 spikes/sec
+      
+    sig_len = y.shape[1]
+    n_windows = np.ceil(sig_len / stride_len).astype(int)
+    energies = np.zeros((20, n_windows))
+
     for k in range(20):
-        for i in range(0,y.shape[1],window_len//2):
+        for i in range(0, sig_len ,stride_len):
             window = y[k, i:i+window_len] 
-            e = np.log(np.sum(np.square(window)))
-            idx = i // (window_len // 2)
-            energies[k, idx] = e
+            energy = np.log(np.sum(np.square(window)))
+            idx = i // stride_len
+            energies[k, idx] = energy
+    print(f"Windowed energies shape: {energies.shape}")
     return energies
 
 def spike_latency_coding(energies):
     '''
-    Obtain spike train for each filter using latency coding.
+    Obtain a spike train for each windowed decomposed signal using latency 
+    coding.
+    ---
+    Each window is one time step. There is one spike per time step. 
+    Fractional energy inside a window is the inverse of the spike time's latency 
+    relative to the beginning of each time step.
     '''
-    n_time_steps = 30 #30 seconds per 1000 possible spikes.
-    #place between 0 and 1.
+
+    # normalise each window and place between 0 and 1
     energies = energies + np.abs(np.min(energies,axis=0))
-    energies = np.divide(energies, np.max(energies, axis=0), where=energies>0)
-    #invert axis (larger energies near 0, smaller energies near 1)
+    energies = np.divide(energies, np.max(energies, axis=0))
+
+    # latency in each encoding window will be the complement of energy 
+    # (place larger energies near 0, smaller energies near 1)
     energies = np.abs(energies - 1)
-    #place between 0 and 30
-    energies = energies * n_time_steps
+    
     #generate latencies
     latencies = np.zeros(energies.shape)
-    latencies[:,1:] = n_time_steps
-    latencies = np.cumsum(latencies, axis=1)
-    #resolution: 0.1 ms
-    latencies += np.round(energies, decimals = 4)
+    latencies[:,1:] = 1 
+    latencies = np.cumsum(latencies, axis=1) 
+    latencies += np.round(energies, decimals = 4) #resolution: 0.1 ms
+
+    # Each time step is (window_len / 32)/1000 sec
+    # for window_len 512, this comes out to 0.016 seconds long.
+
+    sorted_latencies = np.sort(latencies, axis=0)
+    sorted_latencies = np.flip(sorted_latencies,axis=0)
+    is_sorted = latencies == sorted_latencies
+    print(f"Number of time steps with perfectly sorted latencies (strange?):",
+          f"{is_sorted.all(axis=0).sum()}") 
+
     return latencies
 
 def main():
@@ -167,12 +193,10 @@ def main():
         wavelets,
         wavelet_lengths) 
     
-    sys.exit()
-
     energies = windowed_energies(time_domain_convolution)
     spike_trains = spike_latency_coding(energies)
 
-    print("Spike times in first five windows.")
+    print("\nSpike times in first five windows:")
     print(spike_trains[:,:5])
 
 if __name__ == '__main__':
