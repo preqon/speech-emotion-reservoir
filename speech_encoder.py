@@ -1,11 +1,11 @@
 '''
 Encodes speech using spikes under a biologically plausible coding scheme.
+1. digital signal
+2. cochlear filter bank
+3. time domain convolution with input signal
+4. windowed energies
+5. latency coding to spikes
 '''
-# 1. digital signal
-# 2. cochlear filter bank
-# 3. spectrogram
-# 4. spike pattern
-# 5. masked spike pattern
 
 import librosa
 import numpy as np
@@ -19,64 +19,106 @@ def read_wav(path: str):
     frames_array, frame_rate = librosa.load(path, sr=None)
     return (frames_array, frame_rate)
 
-def constant_q_transform(audio_signal, sampling_rate):
+def cochlear_wavelets(sampling_rate):
     '''
-    Constant q transform. Similar to stft, only frequency bins are 
-    logarithmically spaced, and lower frequency bins have a wider range than
-    the higher frequency bins. Energies in each bin therefore better approximate
-    the perception of pitch by human ear.
+    Obtain cochlear-like frequency filters *reconstructed in time domain*.
+    1. Construct cochlear-like filterbank. Using constant Q bases.
+    2. Find impulse response of each filter in time domain. Using ifft.
+    3. Return time-domain wavelets and wavelet lengths.
+
+    ---
+    Constant Q transform is similar to short-time Fourier transform, only 
+    frequency bins are logarithmically spaced, and lower frequency bins have a
+    wider sample range than the higher frequency bins. Relative powers and 
+    temporal resolution from each bin therefore better approximate the 
+    perception of pitch by human ear. 
     '''
-    cqt_matrix = librosa.cqt(
-        audio_signal,
-        sr=sampling_rate,
-        hop_length=38,
-        fmin=15,
-        n_bins=20, 
-        bins_per_octave=3,
-        window='hann',
-        tuning = 0.0,
-        sparsity=0,
-        pad_mode='constant',
+
+    n_filters = 20
+    bins_per_octave=2.1 #covers 15Hz - 8kHz
+    fmin=15
+
+    center_frequencies = librosa.cqt_frequencies(
+        n_bins=n_filters,
+        fmin = fmin,
+        bins_per_octave=bins_per_octave,
+        tuning=0.0 #adjusts f_min. don't care about matching notes.
         )
-    wavelet_size = cqt_matrix.shape[1] 
-    #I think usually wavelet size varies for each freq bin, but librosa's
-    #implementation keeps them consistent.
-    return cqt_matrix, wavelet_size
+    
+    cq_filterbank, cq_filter_lengths = librosa.filters.wavelet(
+        freqs=center_frequencies,
+        sr = sampling_rate,
+        window='hann',#smoothen using Hann window function.
+        filter_scale=1,#scale each filter length (N_k) i.e. vary time resolution
+        pad_fft=True,#Center-pad filters with zeroes.
+        norm=1,#normalise each filter as required by CQT.
+        gamma=0, #constant Q
+        dtype=np.complex64
+    )
 
-def ifft_each_filter(cqt_matrix, n):
-    '''
-    Apply inverse fft to each filter produced by cqt. This is to obtain
-    real valued wavelets in the time domain.
-    Number of samples n in each reconstructed signal is kept to wavelet size (?) 
-    '''
-    decomposed_signal = np.zeros((20, n))
-    for idx, freq_bin in enumerate(cqt_matrix):
-        decomposed_signal[idx] = np.fft.ifft(freq_bin, n=n)
-    return decomposed_signal
+    # spectral_widths = (2 ** (1/bins_per_octave) - 1) * center_frequencies
+    print("Cochlear filterbank central frequencies range from " + 
+          f'{center_frequencies[0]} to {center_frequencies[-1]:.2f} Hz')
 
-def cochlear_wavelets(audio_signal, sampling_rate):
-    '''
-    Obtain wavelets of cochlear filters.
-    1. Construct cochlear-like filter bank. Using CQT.
-    2. Find impulse response (wavelets) of each filter. Using ifft.
-    '''
-    cqt_matrix, wavelet_size = constant_q_transform(audio_signal, sampling_rate)
-    decomposed_signal = ifft_each_filter(cqt_matrix, n=wavelet_size) 
-    return decomposed_signal, wavelet_size
+    cq_filter_lengths = np.ceil(cq_filter_lengths).astype(int) #N_k's 
+    print("Cochlear filterbank shape: ", cq_filterbank.shape)
 
-def cochlear_convolution(signal, decomposed_signal, window_len):
+    '''
+    Apply inverse fft to each cq filter. This is to obtain wavelets in the time
+    domain.
+    '''
+    time_domain_wavelets = [None]*n_filters
+    for k in range(20):
+        start = cq_filterbank.shape[1] // 2 - (
+            np.ceil(cq_filter_lengths[k] / 2).astype(int))
+        # with this start index
+        # even-length filters look like: [0ccc0]
+        # odd-length filters look like: [0ccc]
+        # print(cq_filterbank[k][start],
+            #   cq_filterbank[k][start+cq_filter_lengths[k]-1],
+            #   cq_filter_lengths[k])
+
+        F = cq_filterbank[k][start:start+cq_filter_lengths[k]]
+
+        # enforce symmetry in the filter about the max value
+        # symm obtains real-valued impulse response from the filter after ifft 
+        center = np.ceil(len(F)/2).astype(int)
+        assert(max(F)== F[center]) 
+        F = F[:center+1]
+        F = np.concatenate((F, np.flip(np.conj(F[1:-1]))))
+        f = np.fft.ifft(F)
+        time_domain_wavelets[k] = np.real_if_close(f)
+        assert time_domain_wavelets[k].dtype == np.float64 #checks real-valued
+
+    # odd-length filters after enforcing symmetry now have +1 length 
+    wavelet_lengths = np.where(cq_filter_lengths % 2 == 0,
+                               cq_filter_lengths,
+                               cq_filter_lengths+1) 
+    print(f"Wavelet lengths range from",
+          f"{wavelet_lengths[0]} to {wavelet_lengths[-1]}")
+
+    return time_domain_wavelets, wavelet_lengths 
+
+def cochlear_convolution(signal, wavelets, wavelet_lengths):
     '''
     Obtain a time-domain convolution between input speech signal
-    and cochlear filter wavelets. 
+    and cochlear  wavelets. 
     '''
-    padded_signal = np.pad(signal, ((0,window_len)))
+    max_len = np.max(wavelet_lengths)
+    padded_signal = np.pad(signal, ((0,max_len)))
+
     time_domain_convolution = np.zeros((20, len(signal)))
+
     for k in range(20):
         for n in range(len(signal)):
-            signal_window = padded_signal[n:n+window_len]
-            decomposed_window = decomposed_signal[k]
+            #Extract N_k samples from the signal.
+            signal_window = padded_signal[n:n+wavelet_lengths[k]]
+            #Convolve i.e. dot product signal window and wavelet.
             time_domain_convolution[k,n] = np.dot(
-                signal_window, decomposed_window)
+                signal_window, wavelets[k])
+
+    print(f"Signal shape: {signal.shape}",
+           f"Convolution shape: {time_domain_convolution.shape}")
     return time_domain_convolution 
 
 def windowed_energies(y):
@@ -118,14 +160,14 @@ def main():
 
     audio_signal, sampling_rate = read_wav(path)
 
-    decomposed_signal, wavelet_size = cochlear_wavelets(
-        audio_signal,
-        sampling_rate)
+    wavelets, wavelet_lengths = cochlear_wavelets(sampling_rate)
 
     time_domain_convolution = cochlear_convolution(
         audio_signal, 
-        decomposed_signal,
-        wavelet_size)
+        wavelets,
+        wavelet_lengths) 
+    
+    sys.exit()
 
     energies = windowed_energies(time_domain_convolution)
     spike_trains = spike_latency_coding(energies)
