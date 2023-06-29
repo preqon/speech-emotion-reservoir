@@ -5,8 +5,8 @@ Encodes speech using spikes under a biologically plausible coding scheme.
     - Constant Q filters -> real-valued impulse response (wavelets) 
 2. Perform time domain convolution of each wavelet with input signal to yield
 a signal decomposed into time-frequency domain.
-    - Notice by using wavelet transforms, we could generate a spike for each 
-    convolution in real time in a neuromorphic implementation.
+    - Notice by using wavelet transforms, we could generate spikes
+    in real time in a reservoir-hardware implementation.
 4. Window the decomposed signal and find logarithmic energies in each window. 
 5. Convert energies to spike times using latency code
 
