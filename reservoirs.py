@@ -55,6 +55,7 @@ class SpikeReservoir:
         S: occurence of spikes in last time step.
         threshold: membrane potential threshold.     
         '''
+        self.shape = shape
         self.V = np.zeros(shape)
         self.W = np.zeros((np.prod(shape), np.prod(shape)))
         self.S = np.zeros(shape)
@@ -71,18 +72,62 @@ class SpikeReservoir:
         flat_V = self.V.flatten()
         flat_S = self.S.flatten()
         flat_V = flat_V + np.dot(self.W, flat_S)
-        self.V = np.reshape(flat_V, self.V.shape)
+        self.V = np.reshape(flat_V, self.shape)
         self.S = (self.V > self.threshold).astype(int)
         self.V = np.where(self.V > self.threshold, 0, self.V)
 
 class Empath(SpikeReservoir):
     '''
-    SNN architecture designed to detect speech emotion. 
+    SNN architecture designed to detect speech emotion.
+    Reservoir only convolves input, does not connect to itself (but there is a
+    notion of lateral inhibition).
+    Shape M X N.
+    M should match the size of input (in one time window). 
+    N is the number of time-frequency feature maps to use.
     '''
-    def draw_weights():
-       pass 
+
+    def draw_shared_input_weights(self,n_local_segments=10):
+        '''Draw from Gaussian input weights shared inside each segmented feature
+        map.
+
+        Params
+        ---
+        n_local_segments: `int` Number of feature map segments to use
+        '''
+       
+        assert n_local_segments < self.shape[0], "Too many local segments."
+        err_msg = "M must be multiple of n_local_segments"
+        assert self.shape[0] % n_local_segments == 0, err_msg
+
+        #find segment start indices.
+        segment_width = self.shape[0] // n_local_segments
+        segment_starts = np.asarray([
+            i for i in range(0, self.shape[0], segment_width)
+        ]) 
+
+        #draw shared weights from gaussian
+        prng = np.random.default_rng()
+        shared_weights = prng.normal(
+            loc=0.0, scale=1.0, size=(n_local_segments, self.shape[1])) 
+
+        #input will be fed to different segments of the feature map over time
+        n_windows = n_local_segments
+
+        #4D input weight matrix
+        #(segment_width x M x N x n_windows)
+        input_W = np.zeros(
+            (segment_width, self.shape[0], self.shape[1], n_local_segments))
+
+        for i in range(n_windows): 
+            for j in range(self.shape[1]):
+                input_W[:,:,j,i] = shared_weights[i][j]
+
+        self.input_W = input_W
+
+    def stimulate(self, input_S):
+        pass
 
 def main():
-    pass
+    print('This module contains classes for computation via reservoirs.') 
 if __name__ == "__main__":
     main()
