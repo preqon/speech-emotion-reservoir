@@ -41,6 +41,7 @@
 import numpy as np
 import sys
 import pickle
+import copy
 
 class SpikeReservoir:
     '''
@@ -48,7 +49,7 @@ class SpikeReservoir:
     ---
     '''
 
-    def __init__(self, shape):
+    def __init__(self, shape, threshold=23):
         '''
         V: membrane potentials.
         W: synaptic weights (W[ij] stores neuron j -> neuron i).
@@ -59,7 +60,7 @@ class SpikeReservoir:
         self.V = np.zeros(shape)
         self.W = np.zeros((np.prod(shape), np.prod(shape)))
         self.S = np.zeros(shape)
-        self.threshold = 23 
+        self.threshold = threshold 
 
     def step(self, plasticity=False):
         '''
@@ -68,6 +69,7 @@ class SpikeReservoir:
         where V should be a vector of membrane potentials,
         W should be a matrix of synaptic weights,
         S should be a vector of firing states.
+        no refractory period.
         '''
         flat_V = self.V.flatten()
         flat_S = self.S.flatten()
@@ -86,29 +88,35 @@ class Empath(SpikeReservoir):
     N is the number of time-frequency feature maps to use.
     '''
 
+    def __init__(self, shape, threshold=23):
+        super().__init__(shape, threshold=threshold)
+        self.input_W = None
+        self.pool = None
+
     def draw_shared_input_weights(self,n_local_segments=10):
         '''Draw from Gaussian input weights shared inside each segmented feature
-        map.
+        map. Creates input weight matrix for this instance. 
 
         Params
         ---
         n_local_segments: `int` Number of feature map segments to use
+
+        Returns
+        ---
+        `None`
         '''
        
         assert n_local_segments < self.shape[0], "Too many local segments."
         err_msg = "M must be multiple of n_local_segments"
         assert self.shape[0] % n_local_segments == 0, err_msg
 
-        #find segment start indices.
         segment_width = self.shape[0] // n_local_segments
-        segment_starts = np.asarray([
-            i for i in range(0, self.shape[0], segment_width)
-        ]) 
 
         #draw shared weights from gaussian
         prng = np.random.default_rng()
         shared_weights = prng.normal(
-            loc=0.0, scale=1.0, size=(n_local_segments, self.shape[1])) 
+            loc=0.8, scale=0.1, size=(n_local_segments, self.shape[1])) 
+        assert not (shared_weights < 0).any(), "Negative input weights found."
 
         #input will be fed to different segments of the feature map over time
         n_windows = n_local_segments
@@ -124,8 +132,97 @@ class Empath(SpikeReservoir):
 
         self.input_W = input_W
 
-    def stimulate(self, input_S):
-        pass
+    def stimulate(self, input_S, time_window=0):
+        '''
+        Integrate spikes arriving from input neurons. 
+        
+        Params
+        ---
+        input_S: `ndarray` vector of input neuron states.
+        time_window: `int` index of time windows i.e. also the segment index.
+
+        Returns
+        ---
+        `None`
+        '''
+
+        segment_idx = time_window
+        segment_width = self.shape[0] // self.input_W.shape[3]
+
+        segment_over_thresh = np.zeros(self.shape[1]).astype(bool)
+
+        for feature_idx in range(self.shape[1]):
+            feature = self.V[:, feature_idx]
+
+            segment_start = segment_idx * segment_width
+            segment_end = segment_start + segment_width
+            segment = feature[segment_start:segment_end]
+
+            segment += np.dot(
+                self.input_W[:,:,feature_idx,segment_idx], 
+                input_S)
+            
+            segment_over_thresh[feature_idx] = (segment > self.threshold).any()
+
+            feature[segment_start:segment_end] = segment
+            self.V[:,feature_idx] = feature
+        
+        # random lateral inhibition.
+        over_thresh_idxs = np.where(segment_over_thresh)[0]
+        if len(over_thresh_idxs) > 0:
+            winner = np.random.choice(over_thresh_idxs)
+        for feature_idx in over_thresh_idxs:
+            feature = self.V[:, feature_idx]
+            segment_start = segment_idx * segment_width
+            segment_end = segment_start + segment_width
+            segment = feature[segment_start:segment_end]
+
+            #only let one feature fire
+            if feature_idx != winner:
+                segment = np.where(segment > self.threshold,0,segment)
+                feature[segment_start:segment_end] = segment
+                self.V[:,feature_idx] = feature 
+
+            #only one neuron in the winning feature fires.
+            else:
+                neuron_winners = np.where(segment > self.threshold)[0] 
+                neuron_winner = np.random.choice(neuron_winners)
+                inhibited = neuron_winners[neuron_winners!=neuron_winner]
+                segment[inhibited] = 0
+
+
+        self.step()
+
+    def reset_potentials(self):
+        '''
+        Reset all membrane potentials to 0.
+        '''
+        self.V = 0
+    
+    def pool_segments(self):
+        '''
+        Pool (i.e. counts spikes from) each segment from each feature map.
+        '''
+
+        if self.pool is None:
+            pool_shape = (self.input_W.shape[3], self.shape[1])
+            self.pool = np.zeros(pool_shape)
+
+        segment_width = self.shape[0] // self.input_W.shape[3]
+        
+        for segment_idx in range(self.input_W.shape[3]):
+            segment_start = segment_idx * segment_width
+            segment_end = segment_start + segment_width
+
+            self.pool[segment_idx] += np.matmul(
+                np.ones(segment_width),
+                self.S[segment_start:segment_end],
+            )
+        
+        # print(self.pool)
+
+    def readout(self):
+        return copy.copy(self.pool)
 
 def main():
     print('This module contains classes for computation via reservoirs.') 
