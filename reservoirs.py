@@ -115,20 +115,19 @@ class Empath(SpikeReservoir):
         #draw shared weights from gaussian
         prng = np.random.default_rng()
         shared_weights = prng.normal(
-            loc=0.8, scale=0.1, size=(n_local_segments, self.shape[1])) 
+            loc=0.8,
+            scale=0.1,
+            size=(n_local_segments, self.shape[0], self.shape[1])) 
         assert not (shared_weights < 0).any(), "Negative input weights found."
-
-        #input will be fed to different segments of the feature map over time
-        n_windows = n_local_segments
 
         #4D input weight matrix
         #(segment_width x M x N x n_windows)
         input_W = np.zeros(
             (segment_width, self.shape[0], self.shape[1], n_local_segments))
 
-        for i in range(n_windows): 
-            for j in range(self.shape[1]):
-                input_W[:,:,j,i] = shared_weights[i][j]
+        #broadcast
+        for i in range(n_local_segments):
+            input_W[:,:,:,i] = shared_weights[i]
 
         self.input_W = input_W
 
