@@ -38,6 +38,7 @@ def main():
     #the signal epoch affects which segment of the feature map is stimulated.
 
     readouts = []
+    recorded_spikes = []
     epoch_idx = 0
     for start in stride_starts:
         epoch = input_spike_trains[:,start:start+epoch_len]
@@ -56,12 +57,20 @@ def main():
                     empath.stimulate(S.astype(int), time_window=epoch_idx)
                 else:
                     empath.step()
+
+                empath.update_input_weights_stdp(S.astype(int),
+                                                 time_window=epoch_idx)
                 empath.pool_segments()
                 readouts.append(empath.readout())
+                recorded_spikes.append(empath.get_state())
         epoch_idx += 1
     
     with open('logs/debug/readouts.pk', 'wb+') as f:
         pickle.dump(readouts, f)
+    
+    recorded_spikes = np.asarray(recorded_spikes)
+    with open('logs/debug/reservoir_spikes.pk', 'wb+') as f:
+        pickle.dump(recorded_spikes, f)
 if __name__ == '__main__':
     main()
 

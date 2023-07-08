@@ -88,10 +88,19 @@ class Empath(SpikeReservoir):
     N is the number of time-frequency feature maps to use.
     '''
 
-    def __init__(self, shape, threshold=23):
+    def __init__(
+            self, 
+            shape, 
+            threshold=23,
+            positive_learning_rate=0.004,
+            negative_learning_rate=0.003
+            ):
+
         super().__init__(shape, threshold=threshold)
         self.input_W = None
         self.pool = None
+        self.pos_lr = positive_learning_rate
+        self.neg_lr = negative_learning_rate 
 
     def draw_shared_input_weights(self,n_local_segments=10):
         '''Draw from Gaussian input weights shared inside each segmented feature
@@ -147,19 +156,14 @@ class Empath(SpikeReservoir):
         '''
 
         segment_idx = time_window
-        segment_width = self.shape[0] // self.input_W.shape[3]
 
         segment_over_thresh = np.zeros(self.shape[1]).astype(bool)
         max_neuron_idx = np.zeros(self.shape[1]).astype(int)
         max_neuron = np.zeros(self.shape[1])
 
         for feature_idx in range(self.shape[1]):
-            feature = self.V[:, feature_idx]
-
-            segment_start = segment_idx * segment_width
-            segment_end = segment_start + segment_width
-            segment = feature[segment_start:segment_end]
-
+            segment = self.get_local_segment(segment_idx, feature_idx)
+            
             segment += np.dot(
                 self.input_W[:,:,feature_idx,segment_idx], 
                 input_S)
@@ -168,9 +172,8 @@ class Empath(SpikeReservoir):
             max_neuron_idx[feature_idx] = np.argmax(segment)
             max_neuron[feature_idx] = np.amax(segment)
 
-            feature[segment_start:segment_end] = segment
-            self.V[:,feature_idx] = feature
-        
+            self.set_local_segment(segment_idx, feature_idx, segment)        
+
         # max pot over threshold inhibits other features and neighbourhood
         max_feature_idx = np.argmax(max_neuron) 
         if segment_over_thresh[max_feature_idx]:
@@ -183,6 +186,44 @@ class Empath(SpikeReservoir):
                 self.set_local_segment(segment_idx, feature_idx,segment)
 
         self.step()
+
+    
+    def update_input_weights_stdp(self, input_S, time_window=0):
+        '''Spike-timing dependent plasticity'''
+
+        segment_idx = time_window
+        for feature_idx in range(self.shape[1]):
+            segment_state = self.get_local_segment_state(
+                segment_idx, feature_idx)
+            #updates whole segment negatively and then winner positively.
+            neuron_idx = np.argmax(segment_state)
+            winner_saved_weights = copy.copy(self.input_W[
+                        neuron_idx,
+                        :,
+                        feature_idx,
+                        time_window]) 
+            neg_delta = self.input_W[
+                        :,
+                        :,
+                        feature_idx,
+                        time_window] * np.logical_not(input_S).astype(int)
+            neg_delta = - (self.neg_lr * neg_delta * (1 - neg_delta))
+            self.input_W[:,
+                            :,
+                            feature_idx,
+                            time_window] += neg_delta
+            if segment_state.any():
+                pos_delta = self.input_W[
+                            neuron_idx,
+                            :,
+                            feature_idx,
+                            time_window] * input_S 
+                pos_delta = self.pos_lr * pos_delta * (1 - pos_delta)
+                self.input_W[neuron_idx,
+                                :,
+                                feature_idx,
+                                time_window] = winner_saved_weights + pos_delta 
+
 
     def reset_potentials(self):
         '''
@@ -214,6 +255,19 @@ class Empath(SpikeReservoir):
 
     def readout(self):
         return copy.copy(self.pool)
+    
+    def get_state(self):
+        '''Returns copy of firing state'''
+        return copy.copy(self.S)
+    
+    def get_local_segment_state(self, segment_idx, feature_idx):
+        segment_width = self.shape[0] // self.input_W.shape[3]
+        feature = self.S[:, feature_idx]
+        segment_start = segment_idx * segment_width
+        segment_end = segment_start + segment_width
+        segment = feature[segment_start:segment_end] 
+        return segment
+ 
     
     def get_local_segment(self, segment_idx, feature_idx):
         segment_width = self.shape[0] // self.input_W.shape[3]
