@@ -122,10 +122,11 @@ class Empath(SpikeReservoir):
 
         #4D input weight matrix
         #(segment_width x M x N x n_windows)
+        n_windows = n_local_segments
         input_W = np.zeros(
-            (segment_width, self.shape[0], self.shape[1], n_local_segments))
+            (segment_width, self.shape[0], self.shape[1], n_windows))
 
-        #broadcast
+        #broadcast 3D shared weight values to 4D input weight matrix
         for i in range(n_local_segments):
             input_W[:,:,:,i] = shared_weights[i]
 
@@ -149,6 +150,8 @@ class Empath(SpikeReservoir):
         segment_width = self.shape[0] // self.input_W.shape[3]
 
         segment_over_thresh = np.zeros(self.shape[1]).astype(bool)
+        max_neuron_idx = np.zeros(self.shape[1]).astype(int)
+        max_neuron = np.zeros(self.shape[1])
 
         for feature_idx in range(self.shape[1]):
             feature = self.V[:, feature_idx]
@@ -162,33 +165,22 @@ class Empath(SpikeReservoir):
                 input_S)
             
             segment_over_thresh[feature_idx] = (segment > self.threshold).any()
+            max_neuron_idx[feature_idx] = np.argmax(segment)
+            max_neuron[feature_idx] = np.amax(segment)
 
             feature[segment_start:segment_end] = segment
             self.V[:,feature_idx] = feature
         
-        # random lateral inhibition.
-        over_thresh_idxs = np.where(segment_over_thresh)[0]
-        if len(over_thresh_idxs) > 0:
-            winner = np.random.choice(over_thresh_idxs)
-        for feature_idx in over_thresh_idxs:
-            feature = self.V[:, feature_idx]
-            segment_start = segment_idx * segment_width
-            segment_end = segment_start + segment_width
-            segment = feature[segment_start:segment_end]
-
-            #only let one feature fire
-            if feature_idx != winner:
-                segment = np.where(segment > self.threshold,0,segment)
-                feature[segment_start:segment_end] = segment
-                self.V[:,feature_idx] = feature 
-
-            #only one neuron in the winning feature fires.
-            else:
-                neuron_winners = np.where(segment > self.threshold)[0] 
-                neuron_winner = np.random.choice(neuron_winners)
-                inhibited = neuron_winners[neuron_winners!=neuron_winner]
-                segment[inhibited] = 0
-
+        # max pot over threshold inhibits other features and neighbourhood
+        max_feature_idx = np.argmax(max_neuron) 
+        if segment_over_thresh[max_feature_idx]:
+            for feature_idx in range(self.shape[1]):
+                segment = self.get_local_segment(segment_idx, feature_idx)
+                segment = np.where(segment > self.threshold, 0, segment)
+                if feature_idx == max_feature_idx:
+                    winner = max_neuron_idx[feature_idx]
+                    segment[winner] = max_neuron[feature_idx]
+                self.set_local_segment(segment_idx, feature_idx,segment)
 
         self.step()
 
@@ -222,6 +214,23 @@ class Empath(SpikeReservoir):
 
     def readout(self):
         return copy.copy(self.pool)
+    
+    def get_local_segment(self, segment_idx, feature_idx):
+        segment_width = self.shape[0] // self.input_W.shape[3]
+        feature = self.V[:, feature_idx]
+        segment_start = segment_idx * segment_width
+        segment_end = segment_start + segment_width
+        segment = feature[segment_start:segment_end] 
+        return segment
+
+    def set_local_segment(self, segment_idx, feature_idx, segment):
+        segment_width = self.shape[0] // self.input_W.shape[3]
+        feature = self.V[:, feature_idx]
+        segment_start = segment_idx * segment_width
+        segment_end = segment_start + segment_width
+        feature[segment_start:segment_end] = segment
+        self.V[:,feature_idx] = feature
+
 
 def main():
     print('This module contains classes for computation via reservoirs.') 
