@@ -103,6 +103,12 @@ class Empath(SpikeReservoir):
         self.pos_lr = positive_learning_rate
         self.neg_lr = negative_learning_rate
         self.refractory = np.zeros(shape)
+
+    def step(self, plasticity=False):
+        self.refractory = np.where(
+            self.refractory > 0, self.refractory - 1, self.refractory
+        )
+        super().step()
     
     def draw_shared_input_weights(self,n_local_segments=10):
         '''Draw from Gaussian input weights shared inside each segmented feature
@@ -194,8 +200,8 @@ class Empath(SpikeReservoir):
                     winner = max_neuron_idx[feature_idx]
                     segment[winner] = max_neuron[feature_idx]
                     #refractory period: winner cannot spike until refractory
-                    # reset to zero (happens after each sample) 
-                    seg_refractory[winner] = 1 
+                    # ticks down to zero. 
+                    seg_refractory[winner] = 4 
                 self.set_local_segment(segment_idx, feature_idx,segment)
                 self.set_local_segment_refractory(segment_idx, feature_idx,
                                                   seg_refractory)
