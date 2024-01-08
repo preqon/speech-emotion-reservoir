@@ -191,13 +191,20 @@ def spike_latency_coding(energies):
     return latencies
 
 def main():
-    log = open('logs/speech_encoder.log', 'w+')
+    log = open('logs/speech_encoder_second_run.log', 'w+')
     sys.stdout = log
     wav_paths = glob.glob('data/Crema/*.wav')
+    done_paths = glob.glob('preprocessed/crema_spikes/*.pk')
+    done_paths = [path.split('/')[-1] for path in done_paths] 
     sampling_rate = 16000
     wavelets, wavelet_lengths = cochlear_wavelets(sampling_rate)
     
     for wav_path in wav_paths:
+
+        #skip already done
+        spikes_fname = wav_path.split('/')[-1].split('.wav')[0] + '_spks'
+        if spikes_fname+'.pk' in done_paths:
+            continue
 
         audio_signal, wav_sampling_rate = read_wav(wav_path)
         assert sampling_rate == wav_sampling_rate, "mismatched sampling rate"
@@ -213,7 +220,6 @@ def main():
         print("\nSpike times in first five windows:")
         print(spike_trains[:,:5])
 
-        spikes_fname = wav_path.split('/')[-1].split('.wav')[0] + '_spks'
         with open(f'preprocessed/crema_spikes/{spikes_fname}.pk', 'wb+') as f:
             pickle.dump(spike_trains, f)
     

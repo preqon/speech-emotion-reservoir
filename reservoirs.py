@@ -93,7 +93,8 @@ class Empath(SpikeReservoir):
             self, 
             shape, 
             threshold=23,
-            positive_learning_rate=0.004,
+            positive_learning_rate=0.013, #4 x nlr + 0.001 so that pos affected
+            # weights dont just get negated again during refractory
             negative_learning_rate=0.003
             ):
 
@@ -258,6 +259,12 @@ class Empath(SpikeReservoir):
         '''
         self.refractory = 0
     
+    def reset_pool(self):
+        '''
+        Reset pooling layer to None.
+        '''
+        self.pool = None
+    
     def pool_segments(self):
         '''
         Pool (i.e. counts spikes from) each segment from each feature map.
@@ -326,7 +333,10 @@ class Empath(SpikeReservoir):
         segment_end = segment_start + segment_width
         feature[segment_start:segment_end] = segment
         self.V[:,feature_idx] = feature
-
+    
+    def save_input_weights(self, path):
+        with open(path, 'wb+') as f:
+            pickle.dump(self.input_W, f)
 
 def main():
     print('This module contains classes for computation via reservoirs.') 
