@@ -86,6 +86,7 @@ class Empath(SpikeReservoir):
     Shape M X N.
     M should match the size of input (in one time window). 
     N is the number of time-frequency feature maps to use.
+    Does have refractory period.
     '''
 
     def __init__(
@@ -100,8 +101,9 @@ class Empath(SpikeReservoir):
         self.input_W = None
         self.pool = None
         self.pos_lr = positive_learning_rate
-        self.neg_lr = negative_learning_rate 
-
+        self.neg_lr = negative_learning_rate
+        self.refractory = np.zeros(shape)
+    
     def draw_shared_input_weights(self,n_local_segments=10):
         '''Draw from Gaussian input weights shared inside each segmented feature
         map. Creates input weight matrix for this instance. 
@@ -163,10 +165,15 @@ class Empath(SpikeReservoir):
 
         for feature_idx in range(self.shape[1]):
             segment = self.get_local_segment(segment_idx, feature_idx)
+            seg_refractory = self.get_local_segment_refractory(segment_idx,
+                                                               feature_idx)
             
             segment += np.dot(
                 self.input_W[:,:,feature_idx,segment_idx], 
                 input_S)
+            
+            #refractory period: hold potential to zero where refractory > 0.
+            segment = np.where(seg_refractory > 0, 0, segment)
             
             segment_over_thresh[feature_idx] = (segment > self.threshold).any()
             max_neuron_idx[feature_idx] = np.argmax(segment)
@@ -180,10 +187,18 @@ class Empath(SpikeReservoir):
             for feature_idx in range(self.shape[1]):
                 segment = self.get_local_segment(segment_idx, feature_idx)
                 segment = np.where(segment > self.threshold, 0, segment)
+                seg_refractory = self.get_local_segment_refractory(segment_idx,
+                                                                   feature_idx)
+
                 if feature_idx == max_feature_idx:
                     winner = max_neuron_idx[feature_idx]
                     segment[winner] = max_neuron[feature_idx]
+                    #refractory period: winner cannot spike until refractory
+                    # reset to zero (happens after each sample) 
+                    seg_refractory[winner] = 1 
                 self.set_local_segment(segment_idx, feature_idx,segment)
+                self.set_local_segment_refractory(segment_idx, feature_idx,
+                                                  seg_refractory)
 
         self.step()
 
@@ -209,9 +224,9 @@ class Empath(SpikeReservoir):
                         time_window] * np.logical_not(input_S).astype(int)
             neg_delta = - (self.neg_lr * neg_delta * (1 - neg_delta))
             self.input_W[:,
-                            :,
-                            feature_idx,
-                            time_window] += neg_delta
+                        :,
+                        feature_idx,
+                        time_window] += neg_delta
             if segment_state.any():
                 pos_delta = self.input_W[
                             neuron_idx,
@@ -230,6 +245,12 @@ class Empath(SpikeReservoir):
         Reset all membrane potentials to 0.
         '''
         self.V = 0
+    
+    def reset_refractory(self):
+        '''
+        Reset refractory period for all neurons to 0.
+        '''
+        self.refractory = 0
     
     def pool_segments(self):
         '''
@@ -267,7 +288,22 @@ class Empath(SpikeReservoir):
         segment_end = segment_start + segment_width
         segment = feature[segment_start:segment_end] 
         return segment
- 
+    
+    def get_local_segment_refractory(self, segment_idx, feature_idx):
+        segment_width = self.shape[0] // self.input_W.shape[3]
+        feature = self.refractory[:, feature_idx]
+        segment_start = segment_idx * segment_width
+        segment_end = segment_start + segment_width
+        segment = feature[segment_start:segment_end] 
+        return segment
+
+    def set_local_segment_refractory(self, segment_idx, feature_idx, segment):
+        segment_width = self.shape[0] // self.input_W.shape[3]
+        feature = self.refractory[:, feature_idx]
+        segment_start = segment_idx * segment_width
+        segment_end = segment_start + segment_width
+        feature[segment_start:segment_end] = segment
+        self.refractory[:,feature_idx] = feature
     
     def get_local_segment(self, segment_idx, feature_idx):
         segment_width = self.shape[0] // self.input_W.shape[3]
