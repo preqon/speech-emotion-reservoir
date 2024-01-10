@@ -1,43 +1,3 @@
-# CONVOLUTION
-
-# 1. integrate and fire.
-#       V(t) = V(t-1) + W^T S(t - 1)
-#       reset potential to zero afterwards
-# 2. Feature maps; sublayers convolve different times of input
-# 3. share weights among spatially nearby neurons, but separate sets of weights
-#   for different time periods.
-# 4. lateral inhibition; after a neuron fires, all neurons in the same position
-# in other feature map are inhibited until the next sample appears; there is only ever one spike
-# allowed in each position.
-
-# STDP
-# 1. intitialise weights from Gaussian
-# 2. update weights during training folowing
-#       delta =     a_{p} w_{ij}(1 - w_{ij}) if t_j < t_i
-#               or
-#                   - a_{n} w_{ij} (1 - w_{ij}) otherwise
-# where w is weight of synapse from jth input neuron to ith conv neuron
-# t_i and t_j are firing times
-# a_{p} and a_{n} are learning rates.
-# 3. stop learning when delta is less than 0.01
-# 4. STDP not allowed after one neuron updates in the same position across 
-# feature maps until next sample appears
-
-# POOLING (readout)
-#1. each neuron in pooling layer integrates inputs from one section in the 
-# corresponding feature map in the conv layer.
-# 2. these do not fire; final membrane potentials are used as training data
-# for a linear classifier
-# 3. weights are fixed to one (readout is basicaly the spike number from corresponding
-# section)
-# 4. reset membrane potential after a sample.
-
-# linear classifier
-#1. First train SNN on training set, following STDP.
-#2. Fix weights (turn off plasticity), run the training set again but to train
-# linear classifier on membrane potentials of pooling layer and corresponding labels
-#3. evaluate fixed network using test set with trained classifier
-
 import numpy as np
 import sys
 import pickle
@@ -45,7 +5,7 @@ import copy
 
 class SpikeReservoir:
     '''
-    Integrate and fire spiking neural network.
+    Basic integrate and fire spiking neural network. No refractory period.
     ---
     '''
 
@@ -62,14 +22,13 @@ class SpikeReservoir:
         self.S = np.zeros(shape)
         self.threshold = threshold 
 
-    def step(self, plasticity=False):
+    def step(self):
         '''
         Step according to
         V(t) = V(t-1) + W^T S(t - 1)
         where V should be a vector of membrane potentials,
         W should be a matrix of synaptic weights,
         S should be a vector of firing states.
-        no refractory period.
         '''
         flat_V = self.V.flatten()
         flat_S = self.S.flatten()
@@ -82,19 +41,34 @@ class Empath(SpikeReservoir):
     '''
     SNN architecture designed to detect speech emotion.
     Reservoir only convolves input, does not connect to itself (but there is a
-    notion of lateral inhibition).
+    notion of lateral inhibition). W contains only 0 forever. input_W updates.
     Shape M X N.
     M should match the size of input (in one time window). 
     N is the number of time-frequency feature maps to use.
-    Does have refractory period.
+    A "segment" is several neurons inside one feature map; these share initial
+    weights.
+    A neuron only spikes once per sample. 
+
+    ---
+    IAF as per SpikeReservoir.
+    Segments of each feature convolve different time windows of input.
+    Lateral inhibition: after a neuron fires, all other neurons in this
+    row should be inhibited for the sample. 
+    Spike-timing Dependent Plasticity: if input neuron spike occurs before 
+    target neuron spike, that weight is updated positively and negatively
+    otherwise.
+    STDP should only be allowed once per sample inside a row.
+    STDP should only be allowed once per sample inside a segment.
+    Readout is really just the spike number from each segment. Achieved via
+    pooling layer.
+    Membrane potentials should be reset to zero after each sample. 
     '''
 
     def __init__(
             self, 
             shape, 
             threshold=23,
-            positive_learning_rate=0.013, #4 x nlr + 0.001 so that pos affected
-            # weights dont just get negated again during refractory
+            positive_learning_rate=0.004, 
             negative_learning_rate=0.003
             ):
 
@@ -103,12 +77,10 @@ class Empath(SpikeReservoir):
         self.pool = None
         self.pos_lr = positive_learning_rate
         self.neg_lr = negative_learning_rate
-        self.refractory = np.zeros(shape)
+        self.inhibited = np.ones(shape) #1 for disinhibited, 0 for inhibited
+        self.allow_stdp = np.ones(shape) #1 for allow stdp, 0 for disallow stdp 
 
-    def step(self, plasticity=False):
-        self.refractory = np.where(
-            self.refractory > 0, self.refractory - 1, self.refractory
-        )
+    def step(self):
         super().step()
     
     def draw_shared_input_weights(self,n_local_segments=10):
@@ -166,52 +138,51 @@ class Empath(SpikeReservoir):
 
         segment_idx = time_window
 
-        segment_over_thresh = np.zeros(self.shape[1]).astype(bool)
-        max_neuron_idx = np.zeros(self.shape[1]).astype(int)
-        max_neuron = np.zeros(self.shape[1])
-
         for feature_idx in range(self.shape[1]):
             segment = self.get_local_segment(segment_idx, feature_idx)
-            seg_refractory = self.get_local_segment_refractory(segment_idx,
+            seg_inhibition = self.get_local_segment_inhibition(segment_idx,
                                                                feature_idx)
             
-            segment += np.dot(
+            segment += seg_inhibition * np.dot(
                 self.input_W[:,:,feature_idx,segment_idx], 
                 input_S)
             
-            #refractory period: hold potential to zero where refractory > 0.
-            segment = np.where(seg_refractory > 0, 0, segment)
-            
-            segment_over_thresh[feature_idx] = (segment > self.threshold).any()
-            max_neuron_idx[feature_idx] = np.argmax(segment)
-            max_neuron[feature_idx] = np.amax(segment)
-
             self.set_local_segment(segment_idx, feature_idx, segment)        
-
-        # max pot over threshold inhibits other features and neighbourhood
-        max_feature_idx = np.argmax(max_neuron) 
-        if segment_over_thresh[max_feature_idx]:
-            for feature_idx in range(self.shape[1]):
-                segment = self.get_local_segment(segment_idx, feature_idx)
-                segment = np.where(segment > self.threshold, 0, segment)
-                seg_refractory = self.get_local_segment_refractory(segment_idx,
-                                                                   feature_idx)
-
-                if feature_idx == max_feature_idx:
-                    winner = max_neuron_idx[feature_idx]
-                    segment[winner] = max_neuron[feature_idx]
-                    #refractory period: winner cannot spike until refractory
-                    # ticks down to zero. 
-                    seg_refractory[winner] = 4 
-                self.set_local_segment(segment_idx, feature_idx,segment)
-                self.set_local_segment_refractory(segment_idx, feature_idx,
-                                                  seg_refractory)
+        
+        #lateral inhibition
+        segment_width = self.shape[0] // self.input_W.shape[3]
+        segment_start = segment_idx * segment_width
+        segment_end = segment_start + segment_width
+        for row_idx in range(segment_start, segment_end):
+            #calculate max in row over thresh, inhibit all others in row
+                # set their potential + inhibition to 0.
+            if row_idx >= self.shape[0]:
+                break
+            row_max = np.amax(self.V[row_idx,:])
+            row_max_idx = np.argmax(self.V[row_idx,:])
+            if row_max > self.threshold:
+                self.inhibited[row_idx,:] = 0
+                self.V[row_idx,:] = 0 
+                self.inhibited[row_idx, row_max_idx] = 1
+                self.V[row_idx, row_max_idx] = row_max
 
         self.step()
 
     
     def update_input_weights_stdp(self, input_S, time_window=0):
-        '''Spike-timing dependent plasticity'''
+        '''
+        Spike-timing dependent plasticity
+        ---
+        Update weights during training folowing
+            delta =     a_{p} w_{ij}(1 - w_{ij}) if t_j < t_i
+                or
+                    - a_{n} w_{ij} (1 - w_{ij}) otherwise
+        
+        where w is weight of synapse from jth input neuron to ith conv neuron.
+        t_i and t_j are firing times.
+        a_{p} and a_{n} are learning rates.
+        Stop learning when delta is less than 0.01
+        '''
 
         segment_idx = time_window
         for feature_idx in range(self.shape[1]):
@@ -251,13 +222,13 @@ class Empath(SpikeReservoir):
         '''
         Reset all membrane potentials to 0.
         '''
-        self.V = 0
+        self.V = np.zeros(self.shape) 
     
     def reset_refractory(self):
         '''
         Reset refractory period for all neurons to 0.
         '''
-        self.refractory = 0
+        self.refractory = np.zeros(self.shape) 
     
     def reset_pool(self):
         '''
@@ -268,6 +239,13 @@ class Empath(SpikeReservoir):
     def pool_segments(self):
         '''
         Pool (i.e. counts spikes from) each segment from each feature map.
+
+        ---
+        Each neuron convolves a segment from every feature.
+        These neurons don't fire: final membrane potential trains a 
+        linear classifier.
+        Weights are fixed to one.
+        So readout is really just the spike number from each segment.
         '''
 
         if self.pool is None:
@@ -302,9 +280,9 @@ class Empath(SpikeReservoir):
         segment = feature[segment_start:segment_end] 
         return segment
     
-    def get_local_segment_refractory(self, segment_idx, feature_idx):
+    def get_local_segment_inhibition(self, segment_idx, feature_idx):
         segment_width = self.shape[0] // self.input_W.shape[3]
-        feature = self.refractory[:, feature_idx]
+        feature = self.inhibited[:, feature_idx]
         segment_start = segment_idx * segment_width
         segment_end = segment_start + segment_width
         segment = feature[segment_start:segment_end] 
