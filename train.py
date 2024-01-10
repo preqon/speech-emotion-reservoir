@@ -99,17 +99,21 @@ def main():
             with open(f'logs/debug/reservoir_spikes/{debug_file_name}.pk',
                     'wb+') as f:
                 pickle.dump(recorded_spikes, f)
-            print(f"learned weights from {X_count} samples")
+            print(f"learned weights from {X_count+1} samples")
             empath.save_input_weights(
                 f'logs/debug/learned_weights/{X_count+1}_rounds_weights.pk') 
 
         empath.reset_potentials()
-        empath.reset_refractory()
+        empath.reset_inhibition()
+        empath.reset_allow_stdp()
         empath.reset_pool()
 
         X_count += 1
         if X_count == N_SAMPLES:
            break 
+        if empath.stop_criterion:
+            print("stopping criterion met")
+            break
     
     empath.save_input_weights('final_weights/10jan24.pk')
     print("finished learning weights")

@@ -79,6 +79,7 @@ class Empath(SpikeReservoir):
         self.neg_lr = negative_learning_rate
         self.inhibited = np.ones(shape) #1 for disinhibited, 0 for inhibited
         self.allow_stdp = np.ones(shape) #1 for allow stdp, 0 for disallow stdp 
+        self.stop_criterion = False
 
     def step(self):
         super().step()
@@ -154,8 +155,8 @@ class Empath(SpikeReservoir):
         segment_start = segment_idx * segment_width
         segment_end = segment_start + segment_width
         for row_idx in range(segment_start, segment_end):
-            #calculate max in row over thresh, inhibit all others in row
-                #i.e. just set their potential + inhibition to 0.
+            #calculate max in row over thresh, inhibit self and all others in 
+            #row #i.e. just set their potential + inhibition to 0.
             if row_idx >= self.shape[0]:
                 break
             row_max = copy.copy(np.amax(self.V[row_idx,:]))
@@ -163,8 +164,8 @@ class Empath(SpikeReservoir):
             if row_max > self.threshold:
                 self.inhibited[row_idx,:] = 0
                 self.V[row_idx,:] = 0 
-                self.inhibited[row_idx, row_max_idx] = 1
                 self.V[row_idx, row_max_idx] = row_max
+                # print("time window: ", time_window, "row/col: ", row_idx, row_max_idx)
 
         self.step()
 
@@ -216,11 +217,14 @@ class Empath(SpikeReservoir):
                             col_idx,
                             time_window] += delta 
 
+                    # print("stdp delta: ", delta)
                     #disallow stdp in row
                     self.allow_stdp[row_idx,:] = 0
                     #disallow stdp in segment
                     self.allow_stdp[segment_start:segment_end,col_idx] = 0
                     update_done = True
+
+                    self.stop_criterion = np.sum(abs(delta)) < 0.01 
                     break
             if update_done:
                 break
@@ -231,17 +235,23 @@ class Empath(SpikeReservoir):
         '''
         self.V = np.zeros(self.shape) 
     
-    def reset_refractory(self):
+    def reset_inhibition(self):
         '''
-        Reset refractory period for all neurons to 0.
+        Reset inhibition for all neurons to 1.
         '''
-        self.refractory = np.zeros(self.shape) 
+        self.inhibited = np.ones(self.shape) 
     
     def reset_pool(self):
         '''
         Reset pooling layer to None.
         '''
         self.pool = None
+    
+    def reset_allow_stdp(self):
+        '''
+        Reset allowing stdp for all neurons. 
+        '''
+        self.allow_stdp = np.ones(self.shape) 
     
     def pool_segments(self):
         '''
@@ -278,14 +288,6 @@ class Empath(SpikeReservoir):
     def get_state(self):
         '''Returns copy of firing state'''
         return copy.copy(self.S)
-    
-    def get_local_segment_state(self, segment_idx, feature_idx):
-        segment_width = self.shape[0] // self.input_W.shape[3]
-        feature = self.S[:, feature_idx]
-        segment_start = segment_idx * segment_width
-        segment_end = segment_start + segment_width
-        segment = feature[segment_start:segment_end] 
-        return segment
     
     def get_local_segment_inhibition(self, segment_idx, feature_idx):
         segment_width = self.shape[0] // self.input_W.shape[3]
