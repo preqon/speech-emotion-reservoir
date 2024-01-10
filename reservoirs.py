@@ -79,7 +79,7 @@ class Empath(SpikeReservoir):
         self.neg_lr = negative_learning_rate
         self.inhibited = np.ones(shape) #1 for disinhibited, 0 for inhibited
         self.allow_stdp = np.ones(shape) #1 for allow stdp, 0 for disallow stdp 
-        self.stop_criterion = False
+        self.total_delta = 0
 
     def step(self):
         super().step()
@@ -136,9 +136,9 @@ class Empath(SpikeReservoir):
         ---
         `None`
         '''
-
+        
         segment_idx = time_window
-
+        #find this segment in each feature and convolve input.
         for feature_idx in range(self.shape[1]):
             segment = self.get_local_segment(segment_idx, feature_idx)
             seg_inhibition = self.get_local_segment_inhibition(segment_idx,
@@ -155,8 +155,9 @@ class Empath(SpikeReservoir):
         segment_start = segment_idx * segment_width
         segment_end = segment_start + segment_width
         for row_idx in range(segment_start, segment_end):
-            #calculate max in row over thresh, inhibit self and all others in 
-            #row #i.e. just set their potential + inhibition to 0.
+            #calculate max in row over thresh, inhibit the rest of row  
+            #i.e. just set their potential + inhibition to 0.
+            # they should stay inhibited until end of sample
             if row_idx >= self.shape[0]:
                 break
             row_max = copy.copy(np.amax(self.V[row_idx,:]))
@@ -165,7 +166,9 @@ class Empath(SpikeReservoir):
                 self.inhibited[row_idx,:] = 0
                 self.V[row_idx,:] = 0 
                 self.V[row_idx, row_max_idx] = row_max
-                # print("time window: ", time_window, "row/col: ", row_idx, row_max_idx)
+                # print(
+                # "time window: ", time_window, 
+                # "row/col: ", row_idx, row_max_idx)
 
         self.step()
 
@@ -185,11 +188,12 @@ class Empath(SpikeReservoir):
         Stop learning when delta is less than 0.01
         '''
 
+        #iterate over current segment in each feature.
         segment_idx = time_window
         segment_width = self.shape[0] // self.input_W.shape[3]
         segment_start = segment_idx * segment_width
         segment_end = segment_start + segment_width
-        update_done = False
+
         for row_idx in range(segment_start, segment_end):
             if row_idx >= self.shape[0]:
                 break
@@ -222,12 +226,12 @@ class Empath(SpikeReservoir):
                     self.allow_stdp[row_idx,:] = 0
                     #disallow stdp in segment
                     self.allow_stdp[segment_start:segment_end,col_idx] = 0
-                    update_done = True
+                    #update stop crit
+                    self.total_delta += np.sum(abs(delta))
+                    break #no point checking rest of row
 
-                    self.stop_criterion = np.sum(abs(delta)) < 0.01 
-                    break
-            if update_done:
-                break
+    def check_stop_criterion(self):
+        return self.total_delta < 0.01
 
     def reset_potentials(self):
         '''
@@ -251,7 +255,8 @@ class Empath(SpikeReservoir):
         '''
         Reset allowing stdp for all neurons. 
         '''
-        self.allow_stdp = np.ones(self.shape) 
+        self.allow_stdp = np.ones(self.shape)
+        self.total_delta = 0 
     
     def pool_segments(self):
         '''
