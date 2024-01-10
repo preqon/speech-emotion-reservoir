@@ -155,10 +155,10 @@ class Empath(SpikeReservoir):
         segment_end = segment_start + segment_width
         for row_idx in range(segment_start, segment_end):
             #calculate max in row over thresh, inhibit all others in row
-                # set their potential + inhibition to 0.
+                #i.e. just set their potential + inhibition to 0.
             if row_idx >= self.shape[0]:
                 break
-            row_max = np.amax(self.V[row_idx,:])
+            row_max = copy.copy(np.amax(self.V[row_idx,:]))
             row_max_idx = np.argmax(self.V[row_idx,:])
             if row_max > self.threshold:
                 self.inhibited[row_idx,:] = 0
@@ -185,38 +185,45 @@ class Empath(SpikeReservoir):
         '''
 
         segment_idx = time_window
-        for feature_idx in range(self.shape[1]):
-            segment_state = self.get_local_segment_state(
-                segment_idx, feature_idx)
-            #updates whole segment negatively and then winner positively.
-            neuron_idx = np.argmax(segment_state)
-            winner_saved_weights = copy.copy(self.input_W[
-                        neuron_idx,
-                        :,
-                        feature_idx,
-                        time_window]) 
-            neg_delta = self.input_W[
-                        :,
-                        :,
-                        feature_idx,
-                        time_window] * np.logical_not(input_S).astype(int)
-            neg_delta = - (self.neg_lr * neg_delta * (1 - neg_delta))
-            self.input_W[:,
-                        :,
-                        feature_idx,
-                        time_window] += neg_delta
-            if segment_state.any():
-                pos_delta = self.input_W[
-                            neuron_idx,
+        segment_width = self.shape[0] // self.input_W.shape[3]
+        segment_start = segment_idx * segment_width
+        segment_end = segment_start + segment_width
+        update_done = False
+        for row_idx in range(segment_start, segment_end):
+            if row_idx >= self.shape[0]:
+                break
+            for col_idx in range(self.shape[1]):
+                if self.allow_stdp[row_idx, col_idx]:
+                    #update weight
+                    if self.S[row_idx,col_idx]:
+                        delta = self.input_W[
+                            row_idx - segment_start,
                             :,
-                            feature_idx,
+                            col_idx,
                             time_window] * input_S 
-                pos_delta = self.pos_lr * pos_delta * (1 - pos_delta)
-                self.input_W[neuron_idx,
-                                :,
-                                feature_idx,
-                                time_window] = winner_saved_weights + pos_delta 
+                        delta = self.pos_lr * delta * (1 - delta) 
 
+                    else:
+                        delta = self.input_W[
+                        row_idx - segment_start,
+                        :,
+                        col_idx,
+                        time_window] * np.logical_not(input_S).astype(int)
+                        delta = - (self.neg_lr * delta * (1 - delta)) 
+
+                    self.input_W[row_idx - segment_start,
+                            :,
+                            col_idx,
+                            time_window] += delta 
+
+                    #disallow stdp in row
+                    self.allow_stdp[row_idx,:] = 0
+                    #disallow stdp in segment
+                    self.allow_stdp[segment_start:segment_end,col_idx] = 0
+                    update_done = True
+                    break
+            if update_done:
+                break
 
     def reset_potentials(self):
         '''
@@ -287,14 +294,6 @@ class Empath(SpikeReservoir):
         segment_end = segment_start + segment_width
         segment = feature[segment_start:segment_end] 
         return segment
-
-    def set_local_segment_refractory(self, segment_idx, feature_idx, segment):
-        segment_width = self.shape[0] // self.input_W.shape[3]
-        feature = self.refractory[:, feature_idx]
-        segment_start = segment_idx * segment_width
-        segment_end = segment_start + segment_width
-        feature[segment_start:segment_end] = segment
-        self.refractory[:,feature_idx] = feature
     
     def get_local_segment(self, segment_idx, feature_idx):
         segment_width = self.shape[0] // self.input_W.shape[3]

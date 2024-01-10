@@ -111,7 +111,7 @@ def main():
         if X_count == N_SAMPLES:
            break 
     
-    empath.save_input_weights('final_weights/9jan24.pk')
+    empath.save_input_weights('final_weights/10jan24.pk')
     print("finished learning weights")
     log.close()
     err_log.close()
