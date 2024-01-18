@@ -19,6 +19,7 @@ import numpy as np
 import sys
 import glob
 import pickle
+import warnings
 
 def read_wav(path: str):
     '''
@@ -149,7 +150,8 @@ def windowed_energies(y):
     for k in range(20):
         for i in range(0, sig_len ,stride_len):
             window = y[k, i:i+window_len] 
-            energy = np.log(np.sum(np.square(window)))
+            squared_sum = np.sum(np.square(window)) + 1e-09 #prevent being zero
+            energy = np.log(squared_sum)
             idx = i // stride_len
             energies[k, idx] = energy
     print(f"Windowed energies shape: {energies.shape}")
@@ -167,7 +169,10 @@ def spike_latency_coding(energies):
 
     # normalise each window and place between 0 and 1
     energies = energies + np.abs(np.min(energies,axis=0))
-    energies = np.divide(energies, np.max(energies, axis=0))
+    energies = np.divide(energies,
+                        np.max(energies, axis=0), 
+                        where=np.max(energies,axis=0)!=0)
+                        #if max is 0, all energies are zero already.
 
     # latency in each encoding window will be the complement of energy 
     # (place larger energies near 0, smaller energies near 1)
@@ -191,8 +196,12 @@ def spike_latency_coding(energies):
     return latencies
 
 def main():
-    log = open('logs/speech_encoder_second_run.log', 'w+')
+    warnings.filterwarnings("error", category=RuntimeWarning)
+
+    log = open('logs/speech_encoder_third_run.log', 'w+')
+    errlog = open('logs/speech_encoder_third_run.err', 'w+')
     sys.stdout = log
+    sys.stderr = errlog
     wav_paths = glob.glob('data/Crema/*.wav')
     done_paths = glob.glob('preprocessed/crema_spikes/*.pk')
     done_paths = [path.split('/')[-1] for path in done_paths] 
@@ -201,11 +210,11 @@ def main():
     
     for wav_path in wav_paths:
 
-        #skip already done
+        # skip already done
         spikes_fname = wav_path.split('/')[-1].split('.wav')[0] + '_spks'
         if spikes_fname+'.pk' in done_paths:
             continue
-
+        
         audio_signal, wav_sampling_rate = read_wav(wav_path)
         assert sampling_rate == wav_sampling_rate, "mismatched sampling rate"
 
@@ -220,10 +229,15 @@ def main():
         print("\nSpike times in first five windows:")
         print(spike_trains[:,:5])
 
+        if np.isnan(spike_trains).any():
+            sys.stderr.write(f"NaN detected in {spikes_fname}.\n")
+
         with open(f'preprocessed/crema_spikes/{spikes_fname}.pk', 'wb+') as f:
             pickle.dump(spike_trains, f)
+        
     
     log.close()
+    errlog.close()
 
 if __name__ == '__main__':
     main()
