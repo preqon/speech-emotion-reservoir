@@ -43,7 +43,7 @@ def main():
             'logs/debug/learned_weights/initial_weights.pk')
     else:
         input_W = None
-        with open("cloud_runs/2024-01-15/final_weights.pk", 'rb') as f:
+        with open("final_weights/2024-01-15-weights.pk", 'rb') as f:
             input_W = pickle.load(f)
         empath.set_shared_input_weights(input_W)
 
@@ -121,6 +121,12 @@ def main():
                 print(f"learned weights from {X_count+1} samples")
                 empath.save_input_weights(
                     f'logs/debug/learned_weights/{X_count+1}_rounds_weights.pk') 
+
+        if fixed_weights:
+            with open(
+                f"final_readouts/2024-01-18/{debug_file_name}_readout.pk",
+                'wb+') as f:
+                pickle.dump(empath.readout(), f)
 
         X_count += 1
         if X_count == N_SAMPLES:

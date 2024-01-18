@@ -84,6 +84,12 @@ class Empath(SpikeReservoir):
     def step(self):
         super().step()
     
+    def set_shared_input_weights(self, input_W):
+        self.input_W = input_W
+        if np.isnan(input_W).any():
+            sys.stderr.write(
+                "Warning: Empath found NaN in shared input weights.\n")
+    
     def draw_shared_input_weights(self,n_local_segments=10):
         '''Draw from Gaussian input weights shared inside each segmented feature
         map. Creates input weight matrix for this instance. 
