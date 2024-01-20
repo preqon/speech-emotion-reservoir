@@ -204,28 +204,26 @@ class Empath(SpikeReservoir):
             if row_idx >= self.shape[0]:
                 break
             for col_idx in range(self.shape[1]):
-                if self.allow_stdp[row_idx, col_idx]:
+                if self.allow_stdp[row_idx,col_idx] and self.S[row_idx,col_idx]:
                     #update weight
-                    if self.S[row_idx,col_idx]:
-                        delta = self.input_W[
-                            row_idx - segment_start,
-                            :,
-                            col_idx,
-                            time_window] * input_S 
-                        delta = self.pos_lr * delta * (1 - delta) 
-
-                    else:
-                        delta = self.input_W[
+                    pos_delta = self.input_W[
                         row_idx - segment_start,
                         :,
                         col_idx,
-                        time_window] * np.logical_not(input_S).astype(int)
-                        delta = - (self.neg_lr * delta * (1 - delta)) 
+                        time_window] * input_S 
+                    pos_delta = self.pos_lr * pos_delta * (1 - pos_delta) 
+
+                    neg_delta = self.input_W[
+                    row_idx - segment_start,
+                    :,
+                    col_idx,
+                    time_window] * np.logical_not(input_S).astype(int)
+                    neg_delta = -(self.neg_lr * neg_delta * (1 - neg_delta)) 
 
                     self.input_W[row_idx - segment_start,
                             :,
                             col_idx,
-                            time_window] += delta 
+                            time_window] += pos_delta + neg_delta 
 
                     # print("stdp delta: ", delta)
                     #disallow stdp in row
@@ -233,7 +231,7 @@ class Empath(SpikeReservoir):
                     #disallow stdp in segment
                     self.allow_stdp[segment_start:segment_end,col_idx] = 0
                     #update stop crit
-                    self.total_delta += np.sum(abs(delta))
+                    self.total_delta += np.sum(abs(pos_delta+neg_delta))
                     break #no point checking rest of row
 
     def check_stop_criterion(self):
