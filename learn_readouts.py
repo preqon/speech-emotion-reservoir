@@ -1,6 +1,6 @@
 '''
 This script trains a SVM classifier to map Empath's readouts with the learned 
-weights to speech emotion.
+weights to speech emotion (or digits in the case of fsdd).
 '''
 
 #set up samples: extract labels + train set and test set.
@@ -35,34 +35,42 @@ labels = {
     'NEU': 5,
     }
 # ====
+dstring = "2024-04-19"
 
 def main():
+    dataset = sys.argv[1]
+    if dataset== "crema":
+        n_train_samples = 6000 
+        n_total_samples = 7000
+        n_pools = 250
+    elif dataset == "fsdd":
+        n_train_samples = 2500
+        n_total_samples = 3000
+        n_pools = 200
 
-    #testing first four features only
-    X = np.zeros((3000,20))
-    y = np.zeros(3000)
+    X = np.zeros((n_train_samples,n_pools))
+    y = np.zeros(n_train_samples)
 
-    #testing first four features only
-    X_test = np.zeros((871, 20)) 
-    y_test = np.zeros(871)
+    X_test = np.zeros((n_total_samples-n_train_samples, n_pools)) 
+    y_test = np.zeros(n_total_samples-n_train_samples)
 
     sample_idx = 0
-    for sample_fname in glob.glob('final_readouts/2024-01-18/*pk'):
+    for sample_fname in glob.glob(f'final_readouts/{dstring}/*pk'):
         with open(sample_fname, 'rb') as f:
             sample_data = pickle.load(f) 
 
-        #testing first four features only
-        sample_data = sample_data[:,30:34]
-
         sample_data = sample_data.flatten() 
-        sample_label = sample_fname.split('/')[-1].split('_')[2] 
-        sample_label = labels[sample_label]
-        if sample_idx < 3000:
+        if dataset == "crema":
+            sample_label = sample_fname.split('/')[-1].split('_')[2] 
+            sample_label = labels[sample_label]
+        elif dataset == "fsdd":
+            sample_label = int(sample_fname.split('/')[-1].split('_')[0])
+        if sample_idx < n_train_samples:
             X[sample_idx] = sample_data
             y[sample_idx] = sample_label
         else:
-            X_test[3000-sample_idx] = sample_data
-            y_test[3000-sample_idx] = sample_label
+            X_test[n_train_samples-sample_idx] = sample_data
+            y_test[n_train_samples-sample_idx] = sample_label
         sample_idx += 1
 
     clf =  make_pipeline(

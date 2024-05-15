@@ -198,14 +198,14 @@ def spike_latency_coding(energies):
 def main():
     warnings.filterwarnings("error", category=RuntimeWarning)
 
-    log = open('logs/speech_encoder_third_run.log', 'w+')
-    errlog = open('logs/speech_encoder_third_run.err', 'w+')
+    log = open('logs/speech_encoder_fsdd.log', 'w+')
+    errlog = open('logs/speech_encoder_fsdd.err', 'w+')
     sys.stdout = log
     sys.stderr = errlog
-    wav_paths = glob.glob('data/Crema/*.wav')
-    done_paths = glob.glob('preprocessed/crema_spikes/*.pk')
+    wav_paths = glob.glob('data/fsdd/recordings/*.wav')
+    done_paths = glob.glob('preprocessed/fsdd_spikes/*.pk')
     done_paths = [path.split('/')[-1] for path in done_paths] 
-    sampling_rate = 16000
+    sampling_rate = 8000 #16000
     wavelets, wavelet_lengths = cochlear_wavelets(sampling_rate)
     
     for wav_path in wav_paths:
@@ -216,7 +216,7 @@ def main():
             continue
         
         audio_signal, wav_sampling_rate = read_wav(wav_path)
-        assert sampling_rate == wav_sampling_rate, "mismatched sampling rate"
+        assert sampling_rate == wav_sampling_rate, f"mismatched sampling rate"
 
         time_domain_convolution = cochlear_convolution(
             audio_signal, 
@@ -232,7 +232,7 @@ def main():
         if np.isnan(spike_trains).any():
             sys.stderr.write(f"NaN detected in {spikes_fname}.\n")
 
-        with open(f'preprocessed/crema_spikes/{spikes_fname}.pk', 'wb+') as f:
+        with open(f'preprocessed/fsdd_spikes/{spikes_fname}.pk', 'wb+') as f:
             pickle.dump(spike_trains, f)
         
     

@@ -14,14 +14,16 @@ import glob
 import time
 
 # ==== command line options
-N_SAMPLES = 5000
-fixed_weights = False
+# N_SAMPLES = 5000
+# FIXED_WEIGHTS = False
+# dataset = "crema"
 #===
 
 # ==== script options (check before running)
-log_name = "fixed_readouts"
-n_signal_epochs = 5
-epoch_len = 50
+log_name = "readout-fsdd"
+dstring = "2024-04-19"
+n_signal_epochs = 4 #(set to 5 for crema)
+epoch_len = 8 #(set to 50 for crema)
 time_step_bin_width = 30 
 #====
 
@@ -30,20 +32,24 @@ def main():
     err_log = open(f'logs/{log_name}.err', 'w+')
     sys.stderr = err_log
     sys.stdout = log
+
+    N_SAMPLES = 5000
+    FIXED_WEIGHTS = False
     if len(sys.argv) > 1:
         N_SAMPLES = int(sys.argv[1])
         if sys.argv[2] == "fixed":
-            fixed_weights = True
+            FIXED_WEIGHTS = True
+        dataset = sys.argv[3]
 
     shape = (20, 50)
     empath = Empath(shape, threshold=5)
-    if not fixed_weights:
+    if not FIXED_WEIGHTS:
         empath.draw_shared_input_weights(n_local_segments=n_signal_epochs)
         empath.save_input_weights(
             'logs/debug/learned_weights/initial_weights.pk')
     else:
         input_W = None
-        with open("final_weights/2024-01-15-weights.pk", 'rb') as f:
+        with open(f"final_weights/{dstring}-weights.pk", 'rb') as f:
             input_W = pickle.load(f)
         empath.set_shared_input_weights(input_W)
 
@@ -51,10 +57,10 @@ def main():
 
     X_count = 0
     print("Empath initialised. Iterating over input spike trains.")
-    for crema_spikes_file in glob.glob("preprocessed/crema_spikes/*pk"):
+    for pre_spikes_file in glob.glob(f"preprocessed/{dataset}_spikes/*pk"):
 
         start_time = time.time()
-        with open(crema_spikes_file, 'rb') as f:
+        with open(pre_spikes_file, 'rb') as f:
             input_spike_trains = pickle.load(f)
         
         #signal epochs are windows that slide over the input
@@ -64,9 +70,9 @@ def main():
         stride_len = input_spike_trains.shape[1] // n_signal_epochs
         try:
             assert not np.isnan(
-                input_spike_trains).any(), f"NaN in {crema_spikes_file}"
+                input_spike_trains).any(), f"NaN in {pre_spikes_file}"
             assert epoch_len > stride_len, \
-            f"{crema_spikes_file}: choose a longer signal epoch length"
+            f"{pre_spikes_file}: choose a longer signal epoch length"
         except AssertionError as e:
             sys.stderr.write(str(e) + '\n')
             continue
@@ -98,7 +104,7 @@ def main():
                         #stimulate calls step()
                     else:
                         empath.step()
-                    if not fixed_weights:
+                    if not FIXED_WEIGHTS:
                         empath.update_input_weights_stdp(S.astype(int),
                                                     time_window=epoch_idx)
                     empath.pool_segments()
@@ -107,7 +113,7 @@ def main():
             epoch_idx += 1
 
         end_time = time.time()
-        debug_file_name = crema_spikes_file.split('/')[-1].split('.')[0] 
+        debug_file_name = pre_spikes_file.split('/')[-1].split('.')[0] 
         print(f"{X_count} ({debug_file_name}): {end_time - start_time} secs") 
 
         if X_count % 1000 == 0 or X_count == N_SAMPLES-1:
@@ -117,21 +123,21 @@ def main():
             with open(f'logs/debug/reservoir_spikes/{debug_file_name}.pk',
                     'wb+') as f:
                 pickle.dump(recorded_spikes, f)
-            if not fixed_weights:
+            if not FIXED_WEIGHTS:
                 print(f"learned weights from {X_count+1} samples")
                 empath.save_input_weights(
                     f'logs/debug/learned_weights/{X_count+1}_rounds_weights.pk') 
 
-        if fixed_weights:
+        if FIXED_WEIGHTS:
             with open(
-                f"final_readouts/2024-01-18/{debug_file_name}_readout.pk",
+                f"final_readouts/{dstring}/{debug_file_name}_readout.pk",
                 'wb+') as f:
                 pickle.dump(empath.readout(), f)
 
         X_count += 1
         if X_count == N_SAMPLES:
            break 
-        if not fixed_weights and empath.check_stop_criterion():
+        if not FIXED_WEIGHTS and empath.check_stop_criterion():
             print("stopping criterion met")
             break
    
@@ -140,8 +146,8 @@ def main():
         empath.reset_allow_stdp()
         empath.reset_pool() 
 
-    if not fixed_weights:
-        empath.save_input_weights('final_weights/14jan24.pk')
+    if not FIXED_WEIGHTS:
+        empath.save_input_weights(f'final_weights/{dstring}-weights.pk')
         print("finished learning weights")
 
     log.close()
